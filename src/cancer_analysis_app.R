@@ -24,6 +24,10 @@ library(randomForest)
 library(glmnet)
 library(gbm)
 library(e1071)
+library(xgboost)
+library(nnet)  # Neural Network
+library(naivebayes)  # Naive Bayes
+library(kknn)  # K-Nearest Neighbors
 
 # 贝叶斯优化
 suppressPackageStartupMessages({
@@ -186,7 +190,7 @@ ui <- dashboardPage(
             checkboxInput("regularization", "L1/L2 正则化", value = TRUE),
             
             hr(),
-            checkboxGroupInput("selected_models", "选择机器学习算法:",
+            checkboxGroupInput("selected_models", "选择机器学习算法 (12种):",
                              choices = c("Logistic Regression" = "Logistic",
                                        "Lasso" = "Lasso",
                                        "Ridge" = "Ridge", 
@@ -194,7 +198,11 @@ ui <- dashboardPage(
                                        "Random Forest" = "RandomForest",
                                        "GBM" = "GBM",
                                        "XGBoost" = "XGBoost",
-                                       "SVM" = "SVM"),
+                                       "SVM-Radial" = "SVM",
+                                       "SVM-Linear" = "SVMLinear",
+                                       "Neural Network" = "NeuralNet",
+                                       "Naive Bayes" = "NaiveBayes",
+                                       "K-Nearest Neighbors" = "KNN"),
                              selected = c("Logistic", "RandomForest")),
             
             hr(),
@@ -692,7 +700,6 @@ server <- function(input, output, session) {
       X_train <- as.matrix(rv$train_data[, feature_cols, drop = FALSE])
       y_train <- factor(rv$train_data[[rv$target_col]], labels = c("Class0", "Class1"))
       X_test <- as.matrix(rv$test_data[, feature_cols, drop = FALSE])
-      y_test <- rv$test_data[[rv$target_col]]
       
       rv$models <- list()
       rv$cv_results <- list()
@@ -702,10 +709,29 @@ server <- function(input, output, session) {
       total_models <- length(models_to_train)
       
       # 训练各个模型
+      cat("\n========================================\n")
+      cat("开始训练", total_models, "个模型\n")
+      if (input$cv_method == "cv") {
+        cat("交叉验证方法:", input$cv_folds, "折交叉验证\n")
+      } else if (input$cv_method == "repeatedcv") {
+        cat("交叉验证方法:", input$cv_folds, "折重复", input$cv_repeats, "次\n")
+      }
+      if (input$use_bayesian) {
+        cat("贝叶斯优化: 启用 (迭代次数:", input$bayes_iter, ")\n")
+      } else {
+        cat("贝叶斯优化: 未启用\n")
+      }
+      cat("========================================\n\n")
+      
       for (i in seq_along(models_to_train)) {
         model_name <- models_to_train[i]
-        incProgress(0.8 / total_models, detail = paste("训练", model_name))
+        cat("\n[", i, "/", total_models, "] 开始训练:", model_name, "\n")
+        cat("预计时间:", ifelse(input$cv_method == "cv", 
+                             paste(input$cv_folds, "折"), 
+                             paste(input$cv_folds, "×", input$cv_repeats, "次")), "\n")
+        incProgress(0.8 / total_models, detail = paste("训练", model_name, paste0("(", i, "/", total_models, ")")))
         
+        start_time <- Sys.time()
         tryCatch({
           
           if (model_name == "RandomForest") {
@@ -752,7 +778,9 @@ server <- function(input, output, session) {
               trControl = train_control,
               tuneGrid = tune_grid,
               metric = "ROC",
-              ntree = 500
+              ntree = 300,  # 减少树数量防止过拟合
+              maxnodes = 30,  # 限制节点数防止过拟合
+              importance = TRUE
             )
             
             rv$cv_results[[model_name]] <- fit_cv
@@ -868,21 +896,21 @@ server <- function(input, output, session) {
               
               cat("\n贝叶斯优化: GBM - 基于历史最佳参数进行微调\n")
             } else if (input$use_bayesian) {
-              # 初始化搜索空间（更小的搜索空间以加快速度）
+              # 初始化搜索空间（防止过拟合的参数范围）
               tune_grid <- expand.grid(
-                n.trees = c(100, 200, 300),
-                interaction.depth = c(2, 4, 5),
-                shrinkage = c(0.01, 0.05),
-                n.minobsinnode = 10
+                n.trees = c(50, 100, 150),  # 减少树数量
+                interaction.depth = c(1, 2, 3),  # 降低树深度
+                shrinkage = c(0.01, 0.03, 0.05),  # 较小的学习率
+                n.minobsinnode = c(15, 20)  # 增加最小节点样本数
               )
-              cat("\n贝叶斯优化: GBM - 初始化参数搜索\n")
+              cat("\n贝叶斯优化: GBM - 初始化参数搜索（防过拟合配置）\n")
             } else {
-              # 不使用贝叶斯优化的默认参数
+              # 不使用贝叶斯优化的默认参数（防过拟合配置）
               tune_grid <- expand.grid(
-                n.trees = c(100, 200, 500),
-                interaction.depth = c(3, 5),
-                shrinkage = c(0.01, 0.1),
-                n.minobsinnode = 10
+                n.trees = c(50, 100, 150),
+                interaction.depth = c(1, 2, 3),
+                shrinkage = c(0.01, 0.05),
+                n.minobsinnode = c(15, 20)
               )
             }
             
@@ -931,7 +959,7 @@ server <- function(input, output, session) {
             }
             
           } else {
-            # Logistic 和 SVM
+            # Logistic, SVM, Neural Network, Naive Bayes, KNN
             train_data_simple <- rv$train_data[, c(feature_cols, rv$target_col), drop = FALSE]
             test_data_simple <- rv$test_data[, c(feature_cols, rv$target_col), drop = FALSE]
             
@@ -940,13 +968,148 @@ server <- function(input, output, session) {
             if (model_name == "Logistic") {
               fit <- glm(formula_simple, data = train_data_simple, family = binomial())
               pred_test <- predict(fit, test_data_simple, type = "response")
-            } else {
-              fit <- svm(formula_simple, data = train_data_simple, 
-                        kernel = "radial", probability = TRUE)
-              pred_test <- attr(predict(fit, test_data_simple, probability = TRUE), 
-                               "probabilities")[, "1"]
+              rv$models[[model_name]] <- list(model = fit, pred = pred_test)
+              
+            } else if (model_name == "SVM") {
+              # SVM with scaled data
+              cat("训练 SVM-Radial (可能需要较长时间)...\n")
+              # 数据标准化对SVM很重要
+              scaler <- preProcess(train_data_simple[, feature_cols], method = c("center", "scale"))
+              train_scaled <- predict(scaler, train_data_simple[, feature_cols])
+              test_scaled <- predict(scaler, test_data_simple[, feature_cols])
+              
+              train_scaled[[rv$target_col]] <- factor(train_data_simple[[rv$target_col]], 
+                                                       labels = c("Class0", "Class1"))
+              
+              tune_grid_svm <- expand.grid(
+                sigma = c(0.01, 0.1, 1),
+                C = c(0.1, 1, 10)
+              )
+              
+              fit_cv <- train(
+                x = train_scaled,
+                y = train_scaled[[rv$target_col]],
+                method = "svmRadial",
+                trControl = train_control,
+                tuneGrid = tune_grid_svm,
+                metric = "ROC",
+                preProc = NULL  # 已经手动预处理
+              )
+              
+              rv$cv_results[[model_name]] <- fit_cv
+              pred_test <- predict(fit_cv, test_scaled, type = "prob")[, 2]
+              rv$models[[model_name]] <- list(model = fit_cv, pred = pred_test, scaler = scaler)
+              
+            } else if (model_name == "SVMLinear") {
+              # Linear SVM
+              cat("训练 SVM-Linear...\n")
+              scaler <- preProcess(train_data_simple[, feature_cols], method = c("center", "scale"))
+              train_scaled <- predict(scaler, train_data_simple[, feature_cols])
+              test_scaled <- predict(scaler, test_data_simple[, feature_cols])
+              
+              train_scaled[[rv$target_col]] <- factor(train_data_simple[[rv$target_col]], 
+                                                       labels = c("Class0", "Class1"))
+              
+              tune_grid_svm <- expand.grid(C = c(0.01, 0.1, 1, 10))
+              
+              fit_cv <- train(
+                x = train_scaled,
+                y = train_scaled[[rv$target_col]],
+                method = "svmLinear",
+                trControl = train_control,
+                tuneGrid = tune_grid_svm,
+                metric = "ROC"
+              )
+              
+              rv$cv_results[[model_name]] <- fit_cv
+              pred_test <- predict(fit_cv, test_scaled, type = "prob")[, 2]
+              rv$models[[model_name]] <- list(model = fit_cv, pred = pred_test, scaler = scaler)
+              
+            } else if (model_name == "NeuralNet") {
+              # Neural Network
+              cat("训练 Neural Network...\n")
+              scaler <- preProcess(train_data_simple[, feature_cols], method = c("center", "scale"))
+              train_scaled <- predict(scaler, train_data_simple[, feature_cols])
+              test_scaled <- predict(scaler, test_data_simple[, feature_cols])
+              
+              train_scaled[[rv$target_col]] <- factor(train_data_simple[[rv$target_col]], 
+                                                       labels = c("Class0", "Class1"))
+              
+              tune_grid_nnet <- expand.grid(
+                size = c(3, 5, 7),  # 隐藏层神经元数
+                decay = c(0.01, 0.1, 0.5)  # 权重衰减（正则化）
+              )
+              
+              fit_cv <- train(
+                x = train_scaled,
+                y = train_scaled[[rv$target_col]],
+                method = "nnet",
+                trControl = train_control,
+                tuneGrid = tune_grid_nnet,
+                metric = "ROC",
+                trace = FALSE,  # 不显示详细训练信息
+                MaxNWts = 2000
+              )
+              
+              rv$cv_results[[model_name]] <- fit_cv
+              pred_test <- predict(fit_cv, test_scaled, type = "prob")[, 2]
+              rv$models[[model_name]] <- list(model = fit_cv, pred = pred_test, scaler = scaler)
+              
+            } else if (model_name == "NaiveBayes") {
+              # Naive Bayes
+              cat("训练 Naive Bayes...\n")
+              train_data_nb <- train_data_simple
+              train_data_nb[[rv$target_col]] <- factor(train_data_simple[[rv$target_col]], 
+                                                         labels = c("Class0", "Class1"))
+              
+              tune_grid_nb <- expand.grid(
+                laplace = c(0, 0.5, 1),  # Laplace平滑
+                usekernel = c(TRUE, FALSE),
+                adjust = 1
+              )
+              
+              fit_cv <- train(
+                x = train_data_nb[, feature_cols, drop = FALSE],
+                y = train_data_nb[[rv$target_col]],
+                method = "naive_bayes",
+                trControl = train_control,
+                tuneGrid = tune_grid_nb,
+                metric = "ROC"
+              )
+              
+              rv$cv_results[[model_name]] <- fit_cv
+              pred_test <- predict(fit_cv, test_data_simple[, feature_cols, drop = FALSE], type = "prob")[, 2]
+              rv$models[[model_name]] <- list(model = fit_cv, pred = pred_test)
+              
+            } else if (model_name == "KNN") {
+              # K-Nearest Neighbors
+              cat("训练 KNN...\n")
+              scaler <- preProcess(train_data_simple[, feature_cols], method = c("center", "scale"))
+              train_scaled <- predict(scaler, train_data_simple[, feature_cols])
+              test_scaled <- predict(scaler, test_data_simple[, feature_cols])
+              
+              train_scaled[[rv$target_col]] <- factor(train_data_simple[[rv$target_col]], 
+                                                       labels = c("Class0", "Class1"))
+              
+              tune_grid_knn <- expand.grid(
+                kmax = c(3, 5, 7, 9),  # 最大邻居数
+                distance = 2,
+                kernel = "optimal"
+              )
+              
+              fit_cv <- train(
+                x = train_scaled,
+                y = train_scaled[[rv$target_col]],
+                method = "kknn",
+                trControl = train_control,
+                tuneGrid = tune_grid_knn,
+                metric = "ROC"
+              )
+              
+              rv$cv_results[[model_name]] <- fit_cv
+              pred_test <- predict(fit_cv, test_scaled, type = "prob")[, 2]
+              rv$models[[model_name]] <- list(model = fit_cv, pred = pred_test, scaler = scaler)
             }
-            rv$models[[model_name]] <- list(model = fit, pred = pred_test)
           }
           
           # 计算性能指标
@@ -979,8 +1142,17 @@ server <- function(input, output, session) {
             stringsAsFactors = FALSE
           )
           
+          # 显示训练完成信息
+          end_time <- Sys.time()
+          time_diff <- round(as.numeric(difftime(end_time, start_time, units = "secs")), 2)
+          cat("✓ 完成训练:", model_name, "| 用时:", time_diff, "秒\n")
+          cat("  - CV AUC:", round(cv_auc, 4), 
+              "| Test AUC:", round(as.numeric(auc(roc_obj)), 4), 
+              "| 过拟合差:", round(cv_auc - as.numeric(auc(roc_obj)), 4), "\n")
+          
         }, error = function(e) {
-          showNotification(paste(model_name, "训练失败:", e$message), type = "warning")
+          cat("✗ 训练失败:", model_name, "-", conditionMessage(e), "\n")
+          showNotification(paste(model_name, "训练失败:", e$message), type = "warning", duration = 8)
         })
       }
       
@@ -1069,28 +1241,59 @@ server <- function(input, output, session) {
   })
   
   output$roc_curves <- renderPlotly({
-    req(rv$models, rv$test_data)
+    req(rv$models, rv$test_data, rv$target_col)
     
-    p <- plot_ly()
-    colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#bcbd22")
-    
-    for (i in seq_along(rv$models)) {
-      model_name <- names(rv$models)[i]
-      pred <- rv$models[[model_name]]$pred
-      roc_obj <- roc(rv$test_data[[rv$target_col]], pred, quiet = TRUE)
+    tryCatch({
+      p <- plot_ly()
+      # 扩展颜色以支持12个模型
+      colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", 
+                  "#8c564b", "#e377c2", "#bcbd22", "#17becf", "#7f7f7f",
+                  "#ffbb78", "#98df8a")
       
-      p <- add_trace(p, x = 1 - roc_obj$specificities, y = roc_obj$sensitivities,
+      for (i in seq_along(rv$models)) {
+        model_name <- names(rv$models)[i]
+        pred <- rv$models[[model_name]]$pred
+        
+        # 确保pred和target长度一致
+        if (length(pred) != length(rv$test_data[[rv$target_col]])) {
+          cat("警告:", model_name, "预测长度不匹配\n")
+          next
+        }
+        
+        roc_obj <- roc(rv$test_data[[rv$target_col]], pred, 
+                      levels = c(0, 1), direction = "<", quiet = TRUE)
+        
+        p <- add_trace(p, 
+                      x = 1 - roc_obj$specificities, 
+                      y = roc_obj$sensitivities,
+                      type = "scatter", 
+                      mode = "lines",
+                      name = paste0(model_name, " (AUC=", round(auc(roc_obj), 3), ")"),
+                      line = list(color = colors[(i-1) %% length(colors) + 1], width = 2),
+                      hovertemplate = paste0(model_name, "<br>",
+                                            "FPR: %{x:.3f}<br>",
+                                            "TPR: %{y:.3f}<extra></extra>"))
+      }
+      
+      # 添加对角线
+      p <- add_trace(p, x = c(0, 1), y = c(0, 1), 
                     type = "scatter", mode = "lines",
-                    name = paste0(model_name, " (AUC=", round(auc(roc_obj), 3), ")"),
-                    line = list(color = colors[i], width = 2))
-    }
-    
-    p <- add_trace(p, x = c(0, 1), y = c(0, 1), type = "scatter", mode = "lines",
-                  name = "Random", line = list(color = "gray", dash = "dash"))
-    
-    p %>% layout(title = "ROC曲线对比", 
-                xaxis = list(title = "假阳性率"),
-                yaxis = list(title = "真阳性率"))
+                    name = "随机猜测 (AUC=0.5)", 
+                    line = list(color = "gray", dash = "dash", width = 1))
+      
+      p %>% layout(
+        title = list(text = "ROC曲线对比", font = list(size = 16, color = "black")),
+        xaxis = list(title = "假阳性率 (FPR)", range = c(0, 1)),
+        yaxis = list(title = "真阳性率 (TPR)", range = c(0, 1)),
+        hovermode = "closest",
+        showlegend = TRUE,
+        legend = list(x = 0.6, y = 0.2)
+      )
+    }, error = function(e) {
+      cat("ROC曲线绘制错误:", conditionMessage(e), "\n")
+      plotly_empty() %>% 
+        layout(title = list(text = paste("ROC曲线绘制失败:", conditionMessage(e))))
+    })
   })
   
   output$performance_comparison <- renderPlotly({
@@ -1325,10 +1528,18 @@ server <- function(input, output, session) {
     
     model_name <- input$prediction_model
     model_obj <- rv$models[[model_name]]$model
+    scaler <- rv$models[[model_name]]$scaler  # 获取scaler（如果有）
     
     tryCatch({
+      # 如果模型需要标准化，先对数据进行标准化
+      if (!is.null(scaler)) {
+        new_sample_scaled <- predict(scaler, new_sample)
+      } else {
+        new_sample_scaled <- new_sample
+      }
+      
       if (inherits(model_obj, "train")) {
-        pred_prob <- predict(model_obj, new_sample, type = "prob")[, 2]
+        pred_prob <- predict(model_obj, new_sample_scaled, type = "prob")[, 2]
       } else if (inherits(model_obj, "glm")) {
         pred_prob <- predict(model_obj, new_sample, type = "response")
       } else if (inherits(model_obj, "svm")) {
