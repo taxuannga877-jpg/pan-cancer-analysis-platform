@@ -228,7 +228,7 @@ Feature1,Feature2,Feature3,...,Target
 如有问题或建议，请通过以下方式联系：
 
 - 📧 Email: [your-email@example.com]
-- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/cancer-analysis-platform/issues)
+- 🐛 Issues: [GitHub Issues](https://github.com/taxuannga877-jpg/pan-cancer-analysis-platform/issues)
 
 ## 🙏 致谢
 
@@ -243,4 +243,3 @@ Feature1,Feature2,Feature3,...,Target
 ---
 
 ⭐ 如果这个项目对您有帮助，请给我们一个Star！
-
