@@ -1,0 +1,50 @@
+# R related
+.Rhistory
+.RData
+.Rproj.user
+*.Rproj
+
+# Shiny related
+rsconnect/
+*.log
+
+# Data files (except example data)
+data/*
+!data/example_*.csv
+!data/.gitkeep
+
+# Model files
+models/*
+!models/.gitkeep
+
+# Log files
+logs/*
+!logs/.gitkeep
+
+# Temporary files
+temp/*
+!temp/.gitkeep
+*.tmp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# System files
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Large files
+*.RData
+*.rds
+*.rda
+
+# Backup files
+*.bak
+*.backup
+

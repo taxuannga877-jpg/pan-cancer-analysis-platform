@@ -1,0 +1,90 @@
+# 泛癌数据分析平台 - 配置文件
+# ========================================================================
+
+# 应用信息
+app:
+  name: "泛癌数据分析平台"
+  version: "2.0.0"
+  author: "泛癌数据分析平台开发团队"
+  license: "MIT"
+  description: "基于R Shiny的智能诊断系统"
+
+# 服务器配置
+server:
+  host: "0.0.0.0"
+  port: 3838
+  max_upload_size: 100  # MB
+
+# 模型配置
+model:
+  # 支持的算法
+  algorithms:
+    - LogisticRegression
+    - Lasso
+    - Ridge
+    - ElasticNet
+    - RandomForest
+    - GBM
+    - XGBoost
+    - SVM
+  
+  # 默认参数
+  default_train_ratio: 0.7
+  default_k_folds: 5
+  default_seed: 42
+  
+  # 贝叶斯优化
+  bayesian_optimization:
+    enabled: true
+    init_points: 10
+    n_iter: 20
+  
+  # 过拟合检测阈值
+  overfitting:
+    low_threshold: 0.05
+    medium_threshold: 0.10
+    high_threshold: 0.15
+
+# 数据质量检测
+data_quality:
+  min_test_samples: 100
+  min_class_ratio: 0.20
+  max_class_ratio: 0.80
+  perfect_auc_threshold: 0.99
+
+# SHAP分析配置
+shap:
+  max_samples: 100  # 用于SHAP计算的最大样本数
+  n_features: 10    # 显示的最大特征数
+
+# 文件路径
+paths:
+  data: "data/"
+  models: "models/"
+  logs: "logs/"
+  temp: "temp/"
+
+# 可视化配置
+visualization:
+  theme: "default"
+  color_palette:
+    - "#3c8dbc"
+    - "#00a65a"
+    - "#f39c12"
+    - "#dd4b39"
+    - "#605ca8"
+  figure_width: 800
+  figure_height: 600
+
+# 日志配置
+logging:
+  enabled: true
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/app.log"
+
+# 性能优化
+performance:
+  parallel_cores: 4
+  cache_enabled: true
+  max_memory: 8192  # MB
+
